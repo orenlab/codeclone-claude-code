@@ -12,8 +12,8 @@ uncommitted WIP in declared scope when start would otherwise block on dirty scop
 alone — finish still proves scope via `changed_files` or `diff_ref`.
 
 **Skip pipeline** only when: no files will change; analysis-only; MCP unavailable
-(edits → BLOCKED). Not for read-only review (`codeclone-review`) or snapshots
-(`codeclone-hotspots`).
+(edits → BLOCKED). Not for read-only review (`codeclone-review`), bounded context
+only (`codeclone-implementation-context`), or snapshots (`codeclone-hotspots`).
 
 Findings are source of truth — do not reinterpret. No CLI/local-report fallback.
 Never mutate baseline, cache, canonical reports, or generated state; never
@@ -21,11 +21,12 @@ auto-suppress. Pass absolute `root` to analysis tools.
 
 ## Tool tiers
 
-| Tier               | Tools                                                                                         | Role                             |
-|--------------------|-----------------------------------------------------------------------------------------------|----------------------------------|
-| **Normal**         | `analyze_repository`, `start_controlled_change`, `finish_controlled_change`                   | Every edit cycle — use these     |
-| **Queue/recovery** | `manage_change_intent` (promote, recover, renew, reset)                                       | Multi-agent wait, crash recovery |
-| **Advanced**       | `get_blast_radius`, `check_patch_contract`, `validate_review_claims`, `create_review_receipt` | Debugging or legacy servers only |
+| Tier               | Tools                                                                                                                                 | Role                             |
+|--------------------|---------------------------------------------------------------------------------------------------------------------------------------|----------------------------------|
+| **Normal**         | `analyze_repository`, `start_controlled_change`, `get_relevant_memory`, `get_implementation_context`, `finish_controlled_change`       | Every edit cycle — use these     |
+| **Memory writes**  | `manage_engineering_memory` (`record_candidate`, `validate_claims`, `propose_memory` via finish)                                      | Draft notes before finish        |
+| **Queue/recovery** | `manage_change_intent` (promote, recover, renew, clear, list_workspace, gc_workspace, reset_workspace)                                | Multi-agent wait, crash recovery |
+| **Advanced**       | `get_blast_radius`, `check_patch_contract`, `validate_review_claims`, `create_review_receipt`             | Debugging or legacy servers only |
 
 Workflow tools orchestrate the same steps as atomic tools. They **never run
 analysis**. Do not call atomic verify/receipt/clear in the same cycle when
@@ -38,16 +39,18 @@ One edit cycle:
 ```
 1. analyze_repository(root=abs)           # before-run; skip if valid recent run
 2. start_controlled_change(...)           # see decision table — before first edit
-3. get_relevant_memory(root=abs, scope=... or intent_id=...)  # root required
-4. edit inside declared scope only
-5. analyze_repository(root=abs)           # after-run ONLY if finish will require it
-6. record engineering memory (MCP)        # REQUIRED before finish if §Incident memory
-7. finish_controlled_change(...)          # see decision table — same intent_id
+3. get_relevant_memory(root=abs, scope=... or intent_id=... or symbols=...)  # root required
+4. get_implementation_context(root=abs, paths=..., intent_id=...)  # see codeclone-implementation-context skill
+5. edit inside declared scope only
+6. analyze_repository(root=abs)           # after-run ONLY if finish will require it
+7. record engineering memory (MCP)        # REQUIRED before finish if §Incident memory
+8. finish_controlled_change(...)          # see decision table — same intent_id
    # optional: propose_memory=true on accept for draft memory candidates
 ```
 
-Keep `run_id`, `intent_id`, and the before-run from step 1 through the cycle.
-Intent binds to the **before-run digest** — do not redeclare on the after-run.
+Keep `intent_id` and the before-run from step 1 through the cycle. With
+`intent_id`, the before-run is pinned automatically — `run_id` is optional and
+must match the intent-bound run if supplied.
 
 ### Engineering Memory (step 3)
 
@@ -57,13 +60,14 @@ After `edit_allowed=true`, call `get_relevant_memory` before the first edit.
 auto-bootstraps when the store is missing and a session run exists; explicit
 `refresh_from_run` when you need a forced ingest. No MCP run → auto sync skipped.
 
-| Need                 | Tool                                                                                                                |
-|----------------------|---------------------------------------------------------------------------------------------------------------------|
-| Ranked scope context | `get_relevant_memory(root=abs, scope=… \| intent_id=…)`                                                             |
-| One path             | `query_engineering_memory(mode=for_path, path=…)`                                                                   |
-| Keyword search       | `query_engineering_memory(mode=search, query=…, filters={match_mode:…})`; optional `semantic=true` when index built |
-| Draft observation    | `manage_engineering_memory(action=record_candidate, …)`                                                             |
-| Post-edit proposals  | `finish(..., propose_memory=true)`                                                                                  |
+| Need                                          | Tool                                                                                                                |
+|-----------------------------------------------|---------------------------------------------------------------------------------------------------------------------|
+| Ranked scope context                          | `get_relevant_memory(root=abs, scope=… \| intent_id=… \| symbols=…)`                                                |
+| Bounded structural + call + contract evidence | `get_implementation_context(root=abs, paths=…, intent_id=…)` — `codeclone-implementation-context` skill |
+| One path                                      | `query_engineering_memory(mode=for_path, path=…)`                                                                   |
+| Keyword search                                | `query_engineering_memory(mode=search, query=…, filters={match_mode:…})`; optional `semantic=true` when index built |
+| Draft observation                             | `manage_engineering_memory(action=record_candidate, …)`                                                             |
+| Post-edit proposals                           | `finish(..., propose_memory=true)`                                                                                  |
 
 Full playbook: `codeclone-engineering-memory` skill and
 `docs/book/13-engineering-memory/index.md`. Human approval via VS Code Memory view (not
@@ -112,9 +116,20 @@ hygiene    = git working tree ∩ declared scope
 permission = edit_allowed (with status gate)
 ```
 
-Before edit: scan `do_not_touch` (hard boundary), `direct_dependents`, clone
-cohort / `review_context` (context only). `get_blast_radius(transitive)` only if
-start summary is insufficient.
+Before edit: call `get_implementation_context` with `intent_id` and explicit
+`paths` for files you will edit — it bundles blast zone, `call_context`,
+`change_control` (`do_not_touch` hard vs `review_context` advisory), and optional
+memory lanes. Use `get_blast_radius(transitive)` only for blast-only deep
+inspection when the bundled context is insufficient.
+
+### Shared worktree / freshness
+
+If `get_implementation_context` reports `analysis.freshness.status=drifted`, treat
+that as a **coordination signal** (another agent or parallel WIP may have changed
+the tree) — **not** a trigger to re-analyze in a loop. Verify conclusions that
+matter against the **source files** in your scope; continue when `edit_allowed`
+is true. Re-analyze once at verification boundaries (after-run before `finish`, or
+a deliberate new cycle). Full policy: `codeclone-implementation-context` skill.
 
 Declare in `start`: `allowed_files`, `allowed_related`, `forbidden`, `intent`,
 `expected_effects`. Outside scope → stop → user OK (unless already allowed) →
