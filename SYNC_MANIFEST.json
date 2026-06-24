@@ -1,9 +1,9 @@
 {
   "codeclone_version": "2.1.0a1",
-  "files_copied": 16,
-  "files_deleted": 14,
-  "source_commit": "38940cf",
-  "source_commit_full": "38940cfa0b9b89e45c3d44433368b77e121df216",
+  "files_copied": 17,
+  "files_deleted": 17,
+  "source_commit": "9d27cf4",
+  "source_commit_full": "9d27cf47d6be24b377acd7ddcc2c6dd776ea0425",
   "source_dirty": false,
   "source_paths": [
     "plugins/claude-code-codeclone",
@@ -13,6 +13,6 @@
     "scripts/integration_dist/marketplace.claude-code.json"
   ],
   "source_repository": "orenlab/codeclone",
-  "synced_at_utc": "2026-06-17T07:20:42+00:00",
+  "synced_at_utc": "2026-06-24T12:30:59+00:00",
   "target": "claude-code"
 }
